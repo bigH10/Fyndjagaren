@@ -239,11 +239,17 @@ def bygg_sokningar(huvudkategorier):
         kategori_idn = [0]  # 0 = alla kategorier
         if bevakning.get("kategori"):
             traffar = [(i, n) for i, n in huvudkategorier if matchar(n, [bevakning["kategori"]])]
+            # Matchar flera huvudkategorier (t.ex. "Fordon" och "Fordonsdelar & tillbehör"),
+            # hoppa över de vars namn innehåller något av bevakningens uteslutna ord.
+            utan = [(i, n) for i, n in traffar
+                    if not matchar(n, bevakning.get("uteslut_kategori") or [])]
+            if len(traffar) > 1 and utan:
+                traffar = utan
             if not traffar:
                 print(f"  ! Ingen huvudkategori matchar '{bevakning['kategori']}' "
                       f"({bevakning['namn']}).")
                 continue
-            print(f"  {bevakning['namn']}: söker i {', '.join(n for _, n in traffar)}")
+            print(f"  {bevakning['namn']}: söker i " + ", ".join(f'"{n}"' for _, n in traffar))
             kategori_idn = [i for i, _ in traffar]
 
         sokord = [o.strip() for o in bevakning.get("sokord") or [] if o.strip()]
