@@ -1,0 +1,53 @@
+name: Fyndjägaren
+
+on:
+  schedule:
+    # Var 15:e minut, 4 minuter efter kvart. GitHub är ofta försenat på hel timme och kvart.
+    - cron: "4,19,34,49 * * * *"
+  workflow_dispatch:          # gör att du kan starta den för hand (knappen "Run workflow")
+
+concurrency:
+  group: fyndjagaren
+  cancel-in-progress: false
+
+jobs:
+  leta-fynd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Hämta koden
+        uses: actions/checkout@v7
+
+      - name: Installera Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Installera bibliotek
+        run: pip install requests tzdata
+
+      - name: Installera Claude Code
+        run: npm install -g @anthropic-ai/claude-code@stable
+
+      - name: Hämta minnet (auktioner som redan bedömts)
+        uses: actions/cache/restore@v6
+        with:
+          path: sedda.json
+          key: sedda-${{ github.run_id }}
+          restore-keys: sedda-
+
+      - name: Leta fynd
+        env:
+          TRADERA_APP_ID: ${{ secrets.TRADERA_APP_ID }}
+          TRADERA_APP_KEY: ${{ secrets.TRADERA_APP_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          MANUELL_KORNING: ${{ github.event_name == 'workflow_dispatch' }}
+        run: python fyndjagaren.py
+
+      - name: Spara minnet
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: sedda.json
+          key: sedda-${{ github.run_id }}
