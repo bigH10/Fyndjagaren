@@ -2,7 +2,7 @@ name: Fyndjägaren
 
 on:
   schedule:
-    # Var 15:e minut, 4 minuter efter kvart. GitHub är ofta försenat på hel timme och kvart.
+    # Var 15:e minut. 4 minuter efter kvart. GitHub är ofta försenat på hel timme och kvart.
     - cron: "4,19,34,49 * * * *"
   workflow_dispatch:          # gör att du kan starta den för hand (knappen "Run workflow")
 
