@@ -128,6 +128,7 @@ MAX_ANNONSER_TILL_AI = 200    # tak för hur många auktioner AI:n läser per k�
 MAX_KANDIDATER = 8            # hur många AI:n får plocka ut för noggrann granskning
 MAX_PRISKOLLAR = 3            # Traderas prisförslag tillåter 500 anrop/dygn → max 3 per körning
 MIN_BETYG = 7                 # skicka bara fynd med minst detta betyg (1–10)
+SKICKA_KANDIDATER = True      # skicka också en notis med AI:ns kandidater, så du kan granska själv
 MAX_FYND_PER_NOTIS = 3        # fynd per notis (ntfy.sh tillåter 250 notiser/dygn)
 PAUS_VID_KVOTSLUT_MIN = 30    # paus om abonnemangets gräns nås
 
@@ -509,14 +510,14 @@ Bedöm för varje auktion:
 - Total kostnad inklusive frakt.
 - Skick, äkthet och risker.
 
-Ta bara med auktioner som är riktiga fynd. Ange:
-- betyg: 1–10, där 10 är ett självklart fynd. Var sträng; under {MIN_BETYG} visas inte för användaren.
+Bedöm alla auktionerna och ta med var och en i svaret. Ange:
+- betyg: 1–10, där 10 är ett självklart fynd. Var sträng; bara betyg {MIN_BETYG} och högre blir tips.
 - uppskattat_varde_kr: vad saken är värd på andrahandsmarknaden.
 - max_bud_kr: det högsta bud (utan frakt) som fortfarande ger ett riktigt bra köp.
-- motivering: högst två korta meningar på svenska om varför det är ett fynd.
+- motivering: högst två korta meningar på svenska om varför det är, eller inte är, ett fynd.
 - risker: högst en kort mening om vad som kan gå fel.
 
-Motivering och risker visas i en mobilnotis, så skriv kort och konkret. Hellre inga fynd än tveksamma.
+Motivering och risker visas i en mobilnotis, så skriv kort och konkret.
 
 Om användaren:
 {OM_MIG.strip()}"""
@@ -645,10 +646,7 @@ def expertbedom(claude, tradera, kandidater, annonser, vagar, nu):
                         verktyg="Read" if antal_bilder else "")
     if not svar:
         return []
-    return [f for f in svar["fynd"]
-            if f["id"] in kanda
-            and f["betyg"] >= MIN_BETYG
-            and f["max_bud_kr"] >= (kanda[f["id"]].get("nextBid") or 0)]
+    return [f for f in svar["fynd"] if f["id"] in kanda]
 
 
 # ─── Fynd som väntar på att skickas ────────────────────────────────
@@ -766,6 +764,36 @@ def skicka_fynd(amne, fynd, nu):
                  knappar=knappar, prioritet=4, taggar=["moneybag"])
 
 
+def skicka_kandidater(amne, kandidater, bedomningar, annonser, nu):
+    """Skickar AI:ns kandidater med länk och bedömning, så att du kan granska dem själv."""
+    kanda = {a["id"]: a for a in annonser}
+    bedomd = {f["id"]: f for f in bedomningar}
+    stycken, knappar = [], []
+    for nr, k in enumerate(kandidater, start=1):
+        a = kanda[k["id"]]
+        f = bedomd.get(k["id"])
+        rader = [
+            f"{nr}. {a.get('shortDescription')} ({a['_bevakning']})"
+            + (f" – betyg {f['betyg']}/10" if f else ""),
+            f"Nu {formatera_kr(nuvarande_pris(a))} ({a.get('bidCount', 0)} bud) · "
+            f"slutar {a['_slutar'].astimezone(STOCKHOLM):%H:%M} "
+            f"(om {minuter_kvar(a['_slutar'], nu)} min)",
+        ]
+        if f:
+            rader.append(f"Värt ca {formatera_kr(f['uppskattat_varde_kr'])} · "
+                         f"AI:ns maxbud {formatera_kr(f['max_bud_kr'])}")
+            rader.append(f"AI: {f['motivering']}")
+        else:
+            rader.append(f"Värt ca {formatera_kr(k['uppskattat_varde_kr'])} · {k['varfor']}")
+        rader.append(annonslank(a))
+        stycken.append("\n".join(rader))
+        knappar.append((f"Öppna {nr}", annonslank(a)))
+    titel = (f"{len(kandidater)} kandidater att granska" if len(kandidater) > 1
+             else "1 kandidat att granska")
+    skicka_notis(amne, titel, "\n\n".join(stycken), lank=knappar[0][1], knappar=knappar,
+                 prioritet=3, taggar=["mag"])
+
+
 # ─── Minne: bedömda auktioner, väntande fynd och paus ──────────────
 
 def las_minne(nu):
@@ -789,7 +817,7 @@ def spara_minne(minne):
 
 # ─── Huvudprogram ──────────────────────────────────────────────────
 
-def leta_fynd(tradera, minne, nu):
+def leta_fynd(tradera, minne, nu, amne):
     """Söker, filtrerar och låter AI:n bedöma nya auktioner. Nya fynd läggs bland de väntande."""
     claude = Claude()
     sedda = minne["sedda"]
@@ -825,9 +853,17 @@ def leta_fynd(tradera, minne, nu):
             print(f"    - {k['id']}: {k['sokfras']} (värde ca {k['uppskattat_varde_kr']} kr)")
 
     if kandidater:
-        fynd = expertbedom(claude, tradera, kandidater, kvar, vagar, nu)
+        bedomningar = expertbedom(claude, tradera, kandidater, kvar, vagar, nu)
+        kanda = {a["id"]: a for a in kvar}
+        fynd = [f for f in bedomningar
+                if f["betyg"] >= MIN_BETYG
+                and f["max_bud_kr"] >= (kanda[f["id"]].get("nextBid") or 0)]
         spara_fynd(fynd, kvar, minne["vantande"])
+        for f in bedomningar:
+            print(f"    - {f['id']}: betyg {f['betyg']}/10, maxbud {f['max_bud_kr']} kr – {f['motivering']}")
         print(f"  Expertbedömningen gav {len(fynd)} fynd med betyg {MIN_BETYG} eller högre.")
+        if SKICKA_KANDIDATER:
+            skicka_kandidater(amne, kandidater, bedomningar, kvar, nu)
 
     print(f"  AI-anrop i den här körningen: {claude.antal_anrop} (ingår i ditt abonnemang).")
     return {"alla": len(alla), "bort": sum(skal.values()), "bortfiltrerade": bortfiltrerade,
@@ -850,7 +886,7 @@ def kor(hemligheter, minne, nu):
               "användningsgräns nåddes. Letar inga nya fynd.")
     else:
         try:
-            resultat = leta_fynd(tradera, minne, nu)
+            resultat = leta_fynd(tradera, minne, nu, amne)
         except Kvotslut as fel:
             minne["paus_till"] = (nu + timedelta(minutes=PAUS_VID_KVOTSLUT_MIN)).isoformat()
             print(f"  ! Abonnemangets användningsgräns är nådd ({str(fel)[:200]}). "
